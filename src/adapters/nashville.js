@@ -55,21 +55,27 @@ function extractName(props = {}, fallbackCat) {
   return props.Headline ?? props.Title ?? fallbackCat ?? "Incident";
 }
 
-function extractUpdatedAt(props = {}) {
-  const tsRaw =
-    props.LastUpdate ??
-    props.UpdatedAt ??
-    props.MODIFIEDDATE ??
-    props.call_received ??
-    props.datetime ??
-    undefined;
-
-  if (typeof tsRaw === "number") return new Date(tsRaw).toISOString();
-  if (typeof tsRaw === "string") {
-    const d = new Date(tsRaw);
+function toISO(ts) {
+  if (ts == null) return undefined;
+  if (typeof ts === "number") return new Date(ts).toISOString(); // ArcGIS often ms epoch
+  if (typeof ts === "string") {
+    const d = new Date(ts);
     return isNaN(d.getTime()) ? undefined : d.toISOString();
   }
   return undefined;
+}
+
+function extractUpdatedAt(props = {}) {
+  const tsRaw =
+    props.LastUpdated;
+
+  return toISO(tsRaw);
+}
+
+function extractCallTimeReceived(props = {}) {
+  const tsRaw =
+    props.CallReceivedTime;
+  return toISO(tsRaw);
 }
 
 // concurrency helper
@@ -112,6 +118,7 @@ module.exports = {
         name: extractName(props, extractCategory(props)),
         displayAddress: withCityState(extractAddress(props)),
         updatedAt: extractUpdatedAt(props),
+        callTimeReceived: extractCallTimeReceived(props), // ← NEW
       };
     });
 
@@ -150,6 +157,7 @@ module.exports = {
         lat: Number(g.lat),
         lon: Number(g.lon),
         address: g.formatted || r.displayAddress,
+        callTimeReceived: r.callTimeReceived,
         updatedAt: r.updatedAt,
 
         // preserve provider-specific fields

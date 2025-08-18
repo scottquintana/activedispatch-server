@@ -30,43 +30,57 @@ function parseKmlDescription(descRaw = "") {
     const atIdx = desc.toLowerCase().indexOf(" at ");
     let addrPart = atIdx >= 0 ? desc.slice(atIdx + 4) : desc;
   
-    // Cut at first newline (timestamp often sits after this)
+    // Keep only the first line (the next lines usually hold the timestamp)
     addrPart = addrPart.split("\n")[0].trim();
   
-    // Remove embedded timestamp if it was inlined in the same line
-    // e.g., "... 1500 N BLANDENA ST Sunday, August 17, 2025 4:52 PM ..."
+    // Remove any inline timestamp if it appears on the same line as the address
     const TS_INLINE =
       /\b(?:Sun|Mon|Tue|Tues|Wed|Thu|Thur|Thurs|Fri|Sat)(?:day)?,\s+[A-Za-z]+\s+\d{1,2},\s+\d{4}\s+\d{1,2}:\d{2}\s+(?:AM|PM)\b/i;
     addrPart = addrPart.replace(TS_INLINE, "").trim();
   
-    // Extract and remove bracketed incident id tag, if present
+    // Extract and remove the bracketed incident id, e.g. "[Portland Police #PP25000223544]"
     let incidentId;
     addrPart = addrPart.replace(/\[(?:Portland Police|PPB|Police)[^#]*#([A-Za-z0-9-]+)\]/i, (_, id) => {
       incidentId = id;
       return "";
     }).trim();
   
-    // Normalize spacing/commas and drop trailing ", PORT"/", PORTLAND"
+    // Normalize address punctuation
     addrPart = addrPart
       .replace(/\s{2,}/g, " ")
       .replace(/\s*,\s*/g, ", ")
-      .replace(/,\s*PORT(?:LAND)?\b\.?/i, "")
-      .replace(/,\s*(?:,)+/g, ",")     // collapse duplicate commas
-      .replace(/^,|,$/g, "")           // trim leading/trailing commas
+      .replace(/,\s*PORT(?:LAND)?\b\.?/i, "") // drop trailing ", PORT"
+      .replace(/,\s*(?:,)+/g, ",")
+      .replace(/^,|,$/g, "")
       .trim();
   
-    // Find timestamp anywhere in the full description and convert to ISO
-    const TS_ANYWHERE =
-      /\b(?:Sunday|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday),\s+[A-Za-z]+\s+\d{1,2},\s+\d{4}\s+\d{1,2}:\d{2}\s+(?:AM|PM)\b/i;
-    const timeMatch = desc.match(TS_ANYWHERE);
-    let updatedAt;
-    if (timeMatch) {
-      const d = new Date(`${timeMatch[0]} PT`); // Pacific Time
-      if (!isNaN(d.getTime())) updatedAt = d.toISOString();
-    }
+     // Find the timestamp anywhere in the full description and convert to ISO (Pacific time)
+  const TS_ANYWHERE =
+  /\b(?:Sunday|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday),\s+[A-Za-z]+\s+\d{1,2},\s+\d{4}\s+\d{1,2}:\d{2}\s+(?:AM|PM)\b/i;
+
+const timeMatch = desc.match(TS_ANYWHERE);
+let updatedAt;
+
+if (timeMatch) {
+  const stamp = timeMatch[0]; // e.g., "Sunday, August 17, 2025 4:20 PM"
+  // Try PDT first (-0700), then PST (-0800). One of these will always be correct,
+  // and Date will normalize it to UTC for .toISOString().
+  const tryParse = (s) => {
+    const d = new Date(`${s} GMT-0700`);     // PDT
+    if (!isNaN(d.getTime())) return d;
+    const d2 = new Date(`${s} GMT-0800`);    // PST
+    if (!isNaN(d2.getTime())) return d2;
+    return undefined;
+  };
+
+  const d = tryParse(stamp);
+  if (d) updatedAt = d.toISOString();
+}
+
   
     return { cleanAddress: addrPart, incidentId, updatedAt };
   }
+  
   
 
 async function mapWithConcurrency(items, limit, worker) {
@@ -285,7 +299,7 @@ module.exports = {
         lat: Number(lat),
         lon: Number(lon),
         address,
-        updatedAt: r.updatedAt,
+        callTimeReceived: r.updatedAt,
         extras: {
           incidentTypeCode: r.extras?.incidentTypeCode,
           incidentTypeName: r.extras?.incidentTypeName || r.name,

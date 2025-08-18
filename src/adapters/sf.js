@@ -182,7 +182,7 @@ module.exports = {
         )
       );
 
-      const updatedAt = toISO(
+      const fetchedAt = toISO(
         // prefer the row's own "call_last_updated_at" if present
         pick(r, "call_last_updated_at", "received_datetime", "entry_datetime", "updated_datetime", "dispatch_datetime")
       );
@@ -191,7 +191,7 @@ module.exports = {
       const cad = s(pick(r, "cad_number", "cadnumber", "event_number", "id"));
       const id =
         cad ||
-        `${incidentTypeName || "Incident"}-${updatedAt || ""}-${lat.toFixed?.(5)}${lon.toFixed?.(5)}`;
+        `${incidentTypeName || "Incident"}-${fetchedAt || ""}-${lat.toFixed?.(5)}${lon.toFixed?.(5)}`;
 
       places.push({
         id,
@@ -200,7 +200,7 @@ module.exports = {
         lat,
         lon,
         address,
-        updatedAt,
+        callTimeReceived: fetchedAt,
         extras: {
           cadNumber: cad || undefined,
           priority: pick(r, "priority_final", "priority_original", "priority", "priority_level"),
