@@ -1,7 +1,6 @@
-# activedispatch-server
-# City Incidents Aggregator
+# Active Dispatch (Server)
 
-This project fetches **real-time police dispatch data** from multiple US cities, normalizes it into a consistent shape, and exposes it via a lightweight Fastify API.
+This project fetches **real-time police dispatch data** from multiple US cities, normalizes it into a consistent shape, and exposes it via a lightweight Fastify API to support our mobile apps
 
 Currently supported cities:
 - **Nashville, TN** (Metro Nashville Police Department)
