@@ -1,6 +1,5 @@
 // src/adapters/sf.js
 const { request } = require("undici");
-const { geocode, normalizeAddress } = require("../services/geocode");
 
 /**
  * San Francisco – Law Enforcement Dispatched Calls for Service (Real-Time)
@@ -10,26 +9,13 @@ const { geocode, normalizeAddress } = require("../services/geocode");
  *   SF_DATASET_URL       optional override of dataset URL
  *   SF_SODA_APP_TOKEN    optional X-App-Token for higher rate limits
  *   SF_LIMIT             optional page size (default 1000)
- *   SF_MIN_LAT           bbox (default 37.55)
- *   SF_MAX_LAT           bbox (default 37.95)
- *   SF_MIN_LON           bbox (default -122.60)
- *   SF_MAX_LON           bbox (default -122.20)
- *   SF_BBOX_ENFORCE      "true"/"false" (default "true")
- *   LOG_LEVEL            set "debug" to print diagnostics
+ *   LOG_LEVEL            "debug" to print diagnostics
  */
 
 const DATASET = process.env.SF_DATASET_URL || "https://data.sfgov.org/resource/gnap-fj3t.json";
 const LIMIT = Number(process.env.SF_LIMIT || 1000);
 
-// BBox (tunable/disable-able)
-const SF_BBOX = {
-  minLat: Number(process.env.SF_MIN_LAT ?? 37.55),
-  maxLat: Number(process.env.SF_MAX_LAT ?? 37.95),
-  minLon: Number(process.env.SF_MIN_LON ?? -122.60),
-  maxLon: Number(process.env.SF_MAX_LON ?? -122.20),
-};
-const ENFORCE_BBOX = String(process.env.SF_BBOX_ENFORCE ?? "true") === "true";
-
+/* ------------------------------ utils ------------------------------ */
 function pick(v, ...keys) {
   for (const k of keys) if (v && v[k] != null) return v[k];
   return undefined;
@@ -42,59 +28,91 @@ function toISO(ts) {
 function s(v) {
   return (v ?? "").toString().trim();
 }
-function inSF(lat, lon) {
-  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return false;
-  if (!ENFORCE_BBOX) return true;
-  return (
-    lat >= SF_BBOX.minLat && lat <= SF_BBOX.maxLat &&
-    lon >= SF_BBOX.minLon && lon <= SF_BBOX.maxLon
-  );
-}
 
-// STRICT coordinate extraction (only known shapes)
-function extractCoordsStrict(row) {
-  // 1) Top-level
+/* --------------------- coordinate extraction ---------------------- */
+/** Return {lat, lon} from known SF fields (no bbox, no geocode). */
+function extractCoords(row) {
+  // 1) Top-level latitude/longitude (some Socrata tables use these)
   let lat = Number(row.latitude);
   let lon = Number(row.longitude);
-  if (inSF(lat, lon)) return { lat, lon };
+  if (Number.isFinite(lat) && Number.isFinite(lon)) return { lat, lon };
 
-  // 2) Socrata location variants
-  const loc = row.location || row.point || row.location_1 || row.geom || row.geometry;
-  if (loc && typeof loc === "object") {
-    // 2a) { latitude, longitude }
-    const lat2 = Number(loc.latitude);
-    const lon2 = Number(loc.longitude);
-    if (inSF(lat2, lon2)) return { lat: lat2, lon: lon2 };
-
-    // 2b) GeoJSON [lon, lat]
-    if (Array.isArray(loc.coordinates) && loc.coordinates.length >= 2) {
-      const lon3 = Number(loc.coordinates[0]);
-      const lat3 = Number(loc.coordinates[1]);
-      if (inSF(lat3, lon3)) return { lat: lat3, lon: lon3 };
+  // 2) GeoJSON containers: intersection_point, location, geometry, etc.
+  const candidates = [row.intersection_point, row.location, row.point, row.location_1, row.geom, row.geometry];
+  for (const loc of candidates) {
+    if (!loc) continue;
+    // GeoJSON { type: "Point", coordinates: [lon, lat] }
+    if (typeof loc === "object" && Array.isArray(loc.coordinates) && loc.coordinates.length >= 2) {
+      const lon2 = Number(loc.coordinates[0]);
+      const lat2 = Number(loc.coordinates[1]);
+      if (Number.isFinite(lat2) && Number.isFinite(lon2)) return { lat: lat2, lon: lon2 };
+    }
+    // { latitude, longitude }
+    const lat3 = Number(loc.latitude);
+    const lon3 = Number(loc.longitude);
+    if (Number.isFinite(lat3) && Number.isFinite(lon3)) return { lat: lat3, lon: lon3 };
+    // WKT string "POINT (lon lat)"
+    if (typeof loc === "string") {
+      const m = loc.match(/POINT\s*\(\s*(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)\s*\)/i);
+      if (m) {
+        const lon4 = Number(m[1]);
+        const lat4 = Number(m[2]);
+        if (Number.isFinite(lat4) && Number.isFinite(lon4)) return { lat: lat4, lon: lon4 };
+      }
     }
   }
+
   return { lat: undefined, lon: undefined };
 }
 
-function buildAddressFromHumanAddress(ha) {
-  try {
-    const obj = typeof ha === "string" ? JSON.parse(ha) : ha;
-    const parts = [obj?.address, obj?.city, obj?.state, obj?.zip].filter(Boolean);
-    return parts.join(", ");
-  } catch {
-    return undefined;
-  }
+/* ---------------- street/intersection formatting ------------------ */
+const UPPER_DIRECTIONS = new Set(["N","S","E","W","NE","NW","SE","SW"]);
+const TOKEN_MAP = new Map(Object.entries({
+  "st": "St", "street": "Street",
+  "ave": "Ave", "avenue": "Avenue",
+  "blvd": "Blvd", "boulevard": "Boulevard",
+  "rd": "Rd", "road": "Road",
+  "dr": "Dr", "drive": "Drive",
+  "ct": "Ct", "court": "Court",
+  "ln": "Ln", "lane": "Lane",
+  "ter": "Ter", "terrace": "Terrace",
+  "pl": "Pl", "place": "Place",
+  "pkwy": "Pkwy", "parkway": "Parkway",
+  "hwy": "Hwy", "highway": "Highway",
+  "way": "Way"
+}));
+const LOWER_SMALL = new Set(["of","and","the","at","de","la","del"]);
+
+function capFirst(w) { return w ? w[0].toUpperCase() + w.slice(1).toLowerCase() : w; }
+function titleCaseWord(w, idx) {
+  const raw = w, t = w.toLowerCase();
+  if (UPPER_DIRECTIONS.has(raw.toUpperCase())) return raw.toUpperCase();
+  if (TOKEN_MAP.has(t)) return TOKEN_MAP.get(t);
+  if (LOWER_SMALL.has(t) && idx > 0) return t;
+  if (/^o'/.test(t)) return "O'" + capFirst(t.slice(2));
+  if (/^mc[a-z]/.test(t)) return "Mc" + capFirst(t.slice(2));
+  if (raw.includes("-")) return raw.split("-").map((seg,i)=>titleCaseWord(seg,i)).join("-");
+  return capFirst(t);
+}
+function titleCaseStreet(str="") { return str.trim().split(/\s+/).map(titleCaseWord).join(" "); }
+function normalizeIntersection(str="") {
+  // Replace backslashes (single/multiple) with " / ", normalize slashes, and title-case sides
+  const sep = str.replace(/\s*\\+\s*/g, " / ").replace(/\s*\/\s*/g, " / ");
+  return sep.split(" / ").map(titleCaseStreet).join(" / ");
+}
+function prettifyStreet(street="") {
+  if (!street) return "";
+  return /[\\\/]/.test(street) ? normalizeIntersection(street) : titleCaseStreet(street);
 }
 
-// Heuristic: looks like a street/intersection?
-function looksStreetSpecific(str = "") {
-  const t = String(str).toLowerCase();
+/** Prefer SF dataset fields; do NOT append city/state here. */
+function bestStreetFromDataset(r) {
   return (
-    /\d+\s+[a-z]/i.test(t) || // "123 Main"
-    t.includes("&") ||
-    t.includes(" / ") ||
-    / block\b/i.test(t) ||
-    /\b(st|street|ave|avenue|blvd|dr|rd|ln|terr|pl|ct)\b/i.test(t)
+    s(pick(r, "address")) ||
+    s(pick(r, "intersection_name")) || // <-- SF uses this
+    s(pick(r, "intersection")) ||      // fallback if present
+    s(pick(r, "location_text")) ||
+    ""
   );
 }
 
@@ -106,35 +124,7 @@ function withCityState(addr) {
   return `${clean}, San Francisco, CA`;
 }
 
-// Prefer dataset street fields (no city/state here)
-function bestStreetFromDataset(r) {
-  return (
-    s(pick(r, "address")) ||
-    s(pick(r, "intersection")) ||
-    (r.location && typeof r.location === "object" ? s(buildAddressFromHumanAddress(r.location.human_address)) : "") ||
-    s(pick(r, "location_text")) ||
-    ""
-  );
-}
-
-// Best geocode input (ensures a fallback so we always try)
-function bestAddressForGeocode(r) {
-  return bestStreetFromDataset(r) || s(pick(r, "neighborhood_district")) || "San Francisco City Hall";
-}
-
-async function mapWithConcurrency(items, limit, worker) {
-  const results = new Array(items.length);
-  let i = 0;
-  async function run() {
-    while (i < items.length) {
-      const idx = i++;
-      results[idx] = await worker(items[idx], idx);
-    }
-  }
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, run));
-  return results;
-}
-
+/* ------------------------------ adapter --------------------------- */
 module.exports = {
   name: "sf",
 
@@ -153,35 +143,33 @@ module.exports = {
       throw new Error(`SF adapter HTTP ${res.statusCode}: ${txt.slice(0, 200)}`);
     }
 
-    // Read once as text, then parse
     const text = await res.body.text();
     let rows;
     try {
       rows = JSON.parse(text);
     } catch {
-      if (process.env.LOG_LEVEL === "debug") {
-        console.log("SF non-JSON head:", text.slice(0, 400));
-      }
+      if (process.env.LOG_LEVEL === "debug") console.log("SF non-JSON head:", text.slice(0, 400));
       return { city: "sf", source: "sf", fetchedAt: new Date().toISOString(), places: [] };
     }
 
     if (!Array.isArray(rows) || rows.length === 0) {
-      if (process.env.LOG_LEVEL === "debug") console.log("SF: empty rows array");
       return { city: "sf", source: "sf", fetchedAt: new Date().toISOString(), places: [] };
     }
 
-    if (process.env.LOG_LEVEL === "debug") {
-      console.log("SF sample row keys:", Object.keys(rows[0]));
-    }
+    const places = [];
+    for (const r of rows) {
+      const { lat, lon } = extractCoords(r);
+      if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+        if (process.env.LOG_LEVEL === "debug") console.log("SF skip: no coords for row", r.cad_number || r.id || "");
+        continue; // no coords → skip
+      }
 
-    // Prelim pass
-    const prelim = rows.map((r) => {
-      const { lat, lon } = extractCoordsStrict(r);
+      // Display address purely from dataset; pretty-print intersections
+      const rawStreet = bestStreetFromDataset(r);
+      const prettyStreet = prettifyStreet(rawStreet);
+      const address = withCityState(prettyStreet || "San Francisco, CA");
 
-      const streetFromDataset = bestStreetFromDataset(r);
-      const geocodeQuery = bestAddressForGeocode(r);
-
-      // Prefer final desc → original desc → others
+      // Incident type naming preference
       const incidentTypeName = s(
         pick(
           r,
@@ -195,125 +183,42 @@ module.exports = {
       );
 
       const updatedAt = toISO(
-        pick(r, "received_datetime", "entry_datetime", "updated_datetime", "dispatch_datetime")
+        // prefer the row's own "call_last_updated_at" if present
+        pick(r, "call_last_updated_at", "received_datetime", "entry_datetime", "updated_datetime", "dispatch_datetime")
       );
 
-      const cad = s(pick(r, "cad_number", "cadnumber", "event_number"));
-      const id = cad || `${incidentTypeName || "Incident"}-${updatedAt || ""}`;
+      // ID: prefer CAD number, else stable-ish composite
+      const cad = s(pick(r, "cad_number", "cadnumber", "event_number", "id"));
+      const id =
+        cad ||
+        `${incidentTypeName || "Incident"}-${updatedAt || ""}-${lat.toFixed?.(5)}${lon.toFixed?.(5)}`;
 
-      return {
-        raw: r,
+      places.push({
         id,
         name: incidentTypeName || "Incident",
+        category: undefined,
         lat,
         lon,
-        streetFromDataset,
-        geocodeQuery,
+        address,
         updatedAt,
         extras: {
           cadNumber: cad || undefined,
-          priority: pick(r, "priority", "priority_level"),
+          priority: pick(r, "priority_final", "priority_original", "priority", "priority_level"),
           incidentTypeName: incidentTypeName || undefined,
           callTypeFinal: pick(r, "call_type_final_desc"),
           callTypeOriginal: pick(r, "call_type_original_desc"),
           callTypeOriginalCode: pick(r, "call_type_original"),
-          disposition: pick(r, "call_disposition"),
-          neighborhood: pick(r, "neighborhood_district"),
+          disposition: pick(r, "disposition", "call_disposition"),
+          neighborhood: pick(r, "analysis_neighborhood", "neighborhood_district"),
+          policeDistrict: pick(r, "police_district"),
           supervisorDistrict: pick(r, "supervisor_district"),
-          source: pick(r, "source", "agency"),
+          source: pick(r, "agency", "source"),
         },
-      };
-    });
-
-    // Dedup + geocode any entries missing coords but having any address candidate
-    const needGeo = prelim.filter(p => !(Number.isFinite(p.lat) && Number.isFinite(p.lon)) && p.geocodeQuery);
-    const uniqueMap = new Map();
-    for (const p of needGeo) {
-      const query = withCityState(p.geocodeQuery);
-      const norm = normalizeAddress(query);
-      if (norm && !uniqueMap.has(norm)) uniqueMap.set(norm, query);
-    }
-    const uniqueKeys = Array.from(uniqueMap.keys());
-
-    const geoResults = new Map();
-    await mapWithConcurrency(uniqueKeys, 5, async (norm) => {
-      const original = uniqueMap.get(norm);
-      try {
-        const g = await geocode(original);
-        // only accept points that land inside (or bbox disabled)
-        if (inSF(Number(g.lat), Number(g.lon))) {
-          geoResults.set(norm, g);
-        }
-      } catch { /* ignore */ }
-    });
-
-    // Build final places
-    const places = [];
-    for (const p of prelim) {
-      let lat = p.lat, lon = p.lon;
-
-      if (!(Number.isFinite(lat) && Number.isFinite(lon)) && p.geocodeQuery) {
-        const g = geoResults.get(normalizeAddress(withCityState(p.geocodeQuery)));
-        if (g) { lat = Number(g.lat); lon = Number(g.lon); }
-      }
-
-      if (!inSF(lat, lon)) continue;
-
-      // Choose display address
-      let display = s(p.streetFromDataset);
-      if (!display) {
-        const g = geoResults.get(normalizeAddress(withCityState(p.geocodeQuery || "")));
-        const formatted = g?.formatted;
-        display = looksStreetSpecific(formatted) ? formatted : "";
-      }
-      display = withCityState(display);
-
-      places.push({
-        id: p.id,
-        name: p.name,
-        category: undefined,
-        lat,
-        lon,
-        address: display,
-        updatedAt: p.updatedAt,
-        extras: p.extras,
       });
     }
 
-    // Debug counters
     if (process.env.LOG_LEVEL === "debug") {
-      const total = rows.length;
-      const withCoordsStrict = rows.filter(r => {
-        const { lat, lon } = extractCoordsStrict(r);
-        return Number.isFinite(lat) && Number.isFinite(lon);
-      }).length;
-
-      const prelimCount = prelim.length;
-      const needGeoCount = needGeo.length;
-
-      let geocodedCount = 0;
-      for (const k of geoResults.keys()) geocodedCount++;
-
-      const inBoxAfter = prelim.filter(p => {
-        let lt = p.lat, ln = p.lon;
-        if (!(Number.isFinite(lt) && Number.isFinite(ln)) && p.geocodeQuery) {
-          const g = geoResults.get(normalizeAddress(withCityState(p.geocodeQuery)));
-          if (g) { lt = Number(g.lat); ln = Number(g.lon); }
-        }
-        return inSF(lt, ln);
-      }).length;
-
-      console.log("[SF] totals:", {
-        totalRows: total,
-        strictCoords: withCoordsStrict,
-        prelim: prelimCount,
-        needGeocode: needGeoCount,
-        geocodedOK: geocodedCount,
-        inBoxAfter,
-        finalPlaces: places.length,
-        bbox: SF_BBOX,
-        enforceBBox: ENFORCE_BBOX
-      });
+      console.log(`[SF] rows: ${rows.length}, places: ${places.length}`);
     }
 
     return {
