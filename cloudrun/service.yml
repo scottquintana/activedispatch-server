@@ -1,0 +1,46 @@
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: activedispatch
+spec:
+  template:
+    metadata:
+      annotations:
+        autoscaling.knative.dev/minScale: "0"
+        autoscaling.knative.dev/maxScale: "2"
+        run.googleapis.com/concurrency: "10"
+    spec:
+      serviceAccountName: activedispatch-runner@axiomatic-port-469718-h4.iam.gserviceaccount.com
+      timeoutSeconds: 60
+      containers:
+        - image: us-east4-docker.pkg.dev/axiomatic-port-469718-h4/app-repo/activedispatch:latest
+          ports:
+            - containerPort: 8080
+          env:
+            # plain env vars (non-secrets)
+            - name: LOG_LEVEL
+              value: "info"
+            - name: NASHVILLE_URL
+              value: "https://services2.arcgis.com/HdTo6HJqh92wn4D8/arcgis/rest/services/Metro_Nashville_Police_Department_Active_Dispatch_Table_view/FeatureServer/0/query?outFields=*&where=1%3D1&f=geojson"
+            - name: PORTLAND_URL
+              value: "https://www.portlandmaps.com/scripts/911incidents-kml_link.cfm"
+            - name: SF_DATASET_URL
+              value: "https://data.sfgov.org/resource/gnap-fj3t.json"
+            - name: SF_LIMIT
+              value: "1000"
+            - name: CITY_TTL_SECONDS
+              value: "900"
+            - name: GEOCODE_TTL_SECONDS
+              value: "2592000"
+
+            # secrets (already created in Secret Manager)
+            - name: OPENCAGE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: OPENCAGE_KEY
+                  key: latest
+            - name: SF_SODA_APP_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: SF_SODA_APP_TOKEN
+                  key: latest
