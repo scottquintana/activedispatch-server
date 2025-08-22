@@ -27,6 +27,7 @@ const sf        = require('../src/adapters/sf');
 const CORE_KEYS = ['id','name','lat','lon','address','callTimeReceived','extras'];
 const toCore = (place) => Object.fromEntries(CORE_KEYS.map(k => [k, place[k]]));
 
+
 // Helper that intercepts on the *provided* agent (no stale closure!)
 function interceptGet(agent, urlStr, body, contentType = 'application/json') {
   const u = new URL(urlStr);
@@ -37,6 +38,7 @@ function interceptGet(agent, urlStr, body, contentType = 'application/json') {
     .reply(200, body, { headers: { 'content-type': contentType } });
 }
 
+// add next to interceptGet()
 function interceptRegex(agent, origin, pathRegex, body, contentType = 'application/json') {
   const pool = agent.get(origin);
   pool
@@ -44,7 +46,6 @@ function interceptRegex(agent, origin, pathRegex, body, contentType = 'applicati
     .reply(200, body, { headers: { 'content-type': contentType } });
 }
 
-let agent;
 beforeEach(() => {
   agent = new (require('undici').MockAgent)();
   agent.disableNetConnect();
@@ -60,8 +61,19 @@ beforeEach(() => {
   // Portland KML (dummy URL)
   interceptGet(agent, process.env.PORTLAND_URL, read('pdx.kml'), 'application/vnd.google-earth.kml+xml');
 
-  // SF: intercept BOTH your dummy URL and the real default SODA URL with any query
-  interceptGet(agent, process.env.SF_DATASET_URL, read('sf.json'), 'application/json');
+  // --- SF: intercept BOTH cases ---
+
+  // 1) Your dummy URL with *any* query string
+  //    Matches: /sf, /sf?, /sf?$limit=..., etc.
+  interceptRegex(
+    agent,
+    'https://example.test',
+    /^\/sf(?:\?.*)?$/i,
+    read('sf.json'),
+    'application/json'
+  );
+
+  // 2) The real default SODA endpoint with *any* query string
   interceptRegex(
     agent,
     'https://data.sfgov.org',
