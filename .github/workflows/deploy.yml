@@ -1,8 +1,10 @@
-name: CI/CD Cloud Run
+name: CI + Deploy to Cloud Run
 
 on:
+  pull_request:
+    branches: [ "main" ]   # run tests before merge
   push:
-    branches: [ "main" ]  # merges to main will deploy
+    branches: [ "main" ]   # deploy after merge
 
 env:
   PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
@@ -10,6 +12,7 @@ env:
   REPO: app-repo
   SERVICE: activedispatch
 
+# avoid overlapping runs from the same ref
 concurrency:
   group: cicd-${{ github.ref }}
   cancel-in-progress: true
@@ -31,12 +34,15 @@ jobs:
           LOG_LEVEL: warn
 
   build-and-deploy:
+    name: Build container and deploy to Cloud Run
+    if: github.event_name == 'push'     # only deploy after merge to main
     runs-on: ubuntu-latest
     needs: test
 
     steps:
       - uses: actions/checkout@v4
 
+      # Auth to GCP with the CI/CD service account key you added in repo secrets
       - name: Set up gcloud
         uses: google-github-actions/setup-gcloud@v2
         with:
@@ -44,23 +50,31 @@ jobs:
           service_account_key: ${{ secrets.GCP_SA_KEY }}
           export_default_credentials: true
 
-      - name: Configure Artifact Registry auth
+      # Configure Docker to use gcloud's credential helper (good)
+      - name: Configure Artifact Registry helper
         run: gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
+
+      # ALSO perform an explicit docker login with an OAuth2 access token (fixes your error)
+      - name: Docker login to Artifact Registry
+        run: |
+          echo "$(gcloud auth print-access-token)" | \
+          docker login -u oauth2accesstoken --password-stdin https://${{ env.REGION }}-docker.pkg.dev
 
       - name: Build (linux/amd64) and push
         id: build
         shell: bash
         run: |
+          set -euo pipefail
           IMAGE_BASE=${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPO }}/${{ env.SERVICE }}
           TAG=$(git rev-parse --short=12 HEAD)
           IMAGE="$IMAGE_BASE:$TAG"
           LATEST="$IMAGE_BASE:latest"
 
-          # buildx ensures amd64 (Cloud Run requirement)
+          # Ensure amd64 image for Cloud Run
           docker buildx create --use 2>/dev/null || true
           docker buildx build --platform linux/amd64 -t "$IMAGE" --push .
 
-          # update :latest too (optional)
+          # Update :latest (optional)
           docker buildx imagetools create -t "$LATEST" "$IMAGE"
 
           echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
