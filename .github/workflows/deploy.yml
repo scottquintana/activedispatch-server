@@ -2,9 +2,9 @@ name: CI + Deploy to Cloud Run
 
 on:
   pull_request:
-    branches: [ "main" ]     # run tests before merge
+    branches: [ "main" ]
   push:
-    branches: [ "main" ]     # deploy after merge
+    branches: [ "main" ]
 
 env:
   PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
@@ -33,36 +33,28 @@ jobs:
           LOG_LEVEL: warn
 
   build-and-deploy:
-    name: Build container and deploy to Cloud Run
-    if: github.event_name == 'push'   # only after merge to main
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     needs: test
 
     steps:
       - uses: actions/checkout@v4
 
-      # 1) Authenticate to Google (gets ADC + an access token output)
+      # Auth to Google (sets ADC)
       - id: auth
         uses: google-github-actions/auth@v2
         with:
           credentials_json: ${{ secrets.GCP_SA_KEY }}
 
-      # 2) Install gcloud for the deploy step
+      # Install gcloud for the deploy step
       - uses: google-github-actions/setup-gcloud@v2
         with:
           project_id: ${{ env.PROJECT_ID }}
 
-      # 3) Configure Docker helper (nice to have)
+      # Configure Docker to use gcloud's cred helper
       - name: Configure Artifact Registry helper
         run: gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
 
-      # 4) Explicit Docker login using the access token from the auth step
-      - name: Docker login to Artifact Registry
-        run: |
-          echo "${{ steps.auth.outputs.access_token }}" | \
-          docker login -u oauth2accesstoken --password-stdin https://${{ env.REGION }}-docker.pkg.dev
-
-      # 5) Build (linux/amd64) and push
       - name: Build (linux/amd64) and push
         id: build
         shell: bash
@@ -76,19 +68,16 @@ jobs:
           docker buildx create --use 2>/dev/null || true
           docker buildx build --platform linux/amd64 -t "$IMAGE" --push .
 
-          # update :latest (optional)
           docker buildx imagetools create -t "$LATEST" "$IMAGE"
 
           echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
 
-      # 6) Pin the exact image in your YAML (no commit back; just for this deploy)
       - name: Pin image in service.yaml
         run: |
           IMAGE="${{ steps.build.outputs.image }}"
           sed -i 's#image: .*#image: '"$IMAGE"'#' cloudrun/service.yaml
           echo "Pinned image to $IMAGE"
 
-      # 7) Deploy with declarative config
       - name: Deploy to Cloud Run (replace service)
         run: |
           gcloud run services replace cloudrun/service.yaml \
