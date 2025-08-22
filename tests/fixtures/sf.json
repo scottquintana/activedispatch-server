@@ -1,0 +1,9 @@
+[
+  {
+    "cad_number": "252332978",
+    "call_type_final_desc": "SIT/LIE ENFORCEMENT",
+    "intersection_name": "18TH ST \\ CASTRO ST",
+    "intersection_point": { "type": "Point", "coordinates": [-122.435000702, 37.760888933] },
+    "received_datetime": "2025-08-22T00:21:00Z"
+  }
+]

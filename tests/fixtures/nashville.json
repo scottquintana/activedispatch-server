@@ -1,0 +1,12 @@
+{
+  "features": [
+    {
+      "properties": {
+        "IncidentTypeName": "BURGLARY-RESIDENCE BREAK-IN",
+        "IncidentTypeCode": "70P",
+        "Address": "1310 Coreland Drive",
+        "Call_Received": "2025-08-21T23:56:13Z"
+      }
+    }
+  ]
+}
