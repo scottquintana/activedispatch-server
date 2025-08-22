@@ -80,6 +80,21 @@ function extractName(props = {}, fallbackCat) {
   return props.Headline ?? props.Title ?? fallbackCat ?? "Incident";
 }
 
+// helper to title-case incident type names nicely
+function formatIncidentTypeName(raw) {
+  if (!raw) return undefined;
+  return String(raw)
+    .toLowerCase()
+    // split on space, hyphen, or slash but keep the delimiters
+    .split(/([\/\- ]+)/)
+    .map((part) => {
+      if (/^[\/\- ]+$/.test(part)) return part; // keep delimiters as-is
+      return part.charAt(0).toUpperCase() + part.slice(1);
+    })
+    .join('')
+    .trim();
+}
+
 function toISO(ts) {
   if (ts == null) return undefined;
   if (typeof ts === "number") return new Date(ts).toISOString(); // ArcGIS often ms epoch
@@ -192,7 +207,7 @@ module.exports = {
         updatedAt: r.updatedAt,
         extras: {
           incidentTypeCode: r.props.IncidentTypeCode,
-          incidentTypeName: r.props.IncidentTypeName,
+          incidentTypeName: formatIncidentTypeName(r.props.IncidentTypeName),
         },
       });
     }
