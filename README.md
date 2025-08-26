@@ -34,9 +34,9 @@ Currently supported cities:
         "lat": 36.1627,
         "lon": -86.7816,
         "address": "123 Main St, Nashville, TN",
+        "callTimeReceived": "2025-08-18T22:15:00.000Z",
         "updatedAt": "2025-08-18T22:20:00.000Z",
         "extras": {
-          "callTimeReceived": "2025-08-18T22:15:00.000Z",
           "incidentTypeCode": "911",
           "incidentTypeName": "Emergency"
         }
