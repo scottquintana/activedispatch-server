@@ -1,10 +1,9 @@
-// src/adapters/pdx.js
 const { request } = require("undici");
 const { XMLParser } = require("fast-xml-parser");
 const cheerio = require("cheerio");
 const { geocode, normalizeAddress } = require("../services/geocode");
 
-/** ---------- helpers ---------- */
+// Helpers
 function withCityState(address) {
   if (!address) return "Portland, OR";
   const lower = String(address).toLowerCase();
@@ -96,7 +95,7 @@ async function mapWithConcurrency(items, limit, worker) {
   return results;
 }
 
-/** ---------- KML parsing (primary for PDX) ---------- */
+// KML parsing (primary for PDX)
 function parseKML(text) {
   const parser = new XMLParser({
     ignoreAttributes: false,
@@ -138,7 +137,7 @@ function parseKML(text) {
   });
 }
 
-/** ---------- JSON parsing (fallback) ---------- */
+// JSON parsing (fallback)
 function parseJSONVariant(json) {
   const rows =
     Array.isArray(json) ? json :
@@ -176,7 +175,7 @@ function parseJSONVariant(json) {
   });
 }
 
-/** ---------- HTML table parsing (last resort) ---------- */
+// HTML table parsing (last resort)
 function parseHTMLTable(text) {
   const $ = cheerio.load(text);
   const table = $("table").first();
@@ -225,7 +224,7 @@ function parseHTMLTable(text) {
   return rows;
 }
 
-/** ---------- main adapter ---------- */
+// Main adapter
 module.exports = {
   name: "pdx",
 

@@ -1,4 +1,3 @@
-// src/adapters/sf.js
 const { request } = require("undici");
 
 /**
@@ -29,15 +28,15 @@ function s(v) {
   return (v ?? "").toString().trim();
 }
 
-/* --------------------- coordinate extraction ---------------------- */
-/** Return {lat, lon} from known SF fields (no bbox, no geocode). */
+// Coordinate extraction
+// Return {lat, lon} from known SF fields (no bbox, no geocode).
 function extractCoords(row) {
-  // 1) Top-level latitude/longitude (some Socrata tables use these)
+  // Top-level latitude/longitude (some Socrata tables use these)
   let lat = Number(row.latitude);
   let lon = Number(row.longitude);
   if (Number.isFinite(lat) && Number.isFinite(lon)) return { lat, lon };
 
-  // 2) GeoJSON containers: intersection_point, location, geometry, etc.
+  // GeoJSON containers: intersection_point, location, geometry, etc.
   const candidates = [row.intersection_point, row.location, row.point, row.location_1, row.geom, row.geometry];
   for (const loc of candidates) {
     if (!loc) continue;
@@ -65,7 +64,7 @@ function extractCoords(row) {
   return { lat: undefined, lon: undefined };
 }
 
-/* ---------------- street/intersection formatting ------------------ */
+// Street/intersection formatting
 const UPPER_DIRECTIONS = new Set(["N","S","E","W","NE","NW","SE","SW"]);
 const TOKEN_MAP = new Map(Object.entries({
   "st": "St", "street": "Street",
@@ -105,7 +104,7 @@ function prettifyStreet(street="") {
   return /[\\\/]/.test(street) ? normalizeIntersection(street) : titleCaseStreet(street);
 }
 
-/** Prefer SF dataset fields; do NOT append city/state here. */
+// Prefer SF dataset fields; do NOT append city/state here.
 function bestStreetFromDataset(r) {
   return (
     s(pick(r, "address")) ||
@@ -124,7 +123,7 @@ function withCityState(addr) {
   return `${clean}, San Francisco, CA`;
 }
 
-/* ------------------------------ adapter --------------------------- */
+// Adapter
 module.exports = {
   name: "sf",
 
