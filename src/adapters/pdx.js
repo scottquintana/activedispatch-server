@@ -1,4 +1,3 @@
-// src/adapters/pdx.js
 const { request } = require("undici");
 const { XMLParser } = require("fast-xml-parser");
 const cheerio = require("cheerio");
@@ -126,7 +125,7 @@ async function mapWithConcurrency(items, limit, worker) {
   return results;
 }
 
-/** ---------- KML parsing (primary for PDX) ---------- */
+// KML parsing (primary for PDX)
 function parseKML(text) {
   const parser = new XMLParser({
     ignoreAttributes: false,
@@ -168,7 +167,7 @@ function parseKML(text) {
   });
 }
 
-/** ---------- JSON parsing (fallback) ---------- */
+// JSON parsing (fallback)
 function parseJSONVariant(json) {
   const rows =
     Array.isArray(json) ? json :
@@ -206,7 +205,7 @@ function parseJSONVariant(json) {
   });
 }
 
-/** ---------- HTML table parsing (last resort) ---------- */
+// HTML table parsing (last resort)
 function parseHTMLTable(text) {
   const $ = cheerio.load(text);
   const table = $("table").first();
@@ -255,7 +254,7 @@ function parseHTMLTable(text) {
   return rows;
 }
 
-/** ---------- main adapter ---------- */
+// Main adapter
 module.exports = {
   name: "pdx",
 
@@ -331,6 +330,21 @@ module.exports = {
         } catch { /* ignore geocode errors */ }
       }),
     ]);
+
+    // Neighborhood lookup — collect unique coords
+    const uniqueCoords = new Map();
+    for (const r of rows) {
+      const lat = Number.isFinite(r.lat) ? r.lat : geoResults.get(normalizeAddress(r.address))?.lat;
+      const lon = Number.isFinite(r.lon) ? r.lon : geoResults.get(normalizeAddress(r.address))?.lon;
+      if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
+      const key = `${lat.toFixed(4)},${lon.toFixed(4)}`;
+      if (!uniqueCoords.has(key)) uniqueCoords.set(key, { lat, lon });
+    }
+    const coordKeys = Array.from(uniqueCoords.keys());
+    await mapWithConcurrency(coordKeys, 5, async (key) => {
+      const { lat, lon } = uniqueCoords.get(key);
+      await lookupNeighborhood(lat, lon);
+    });
 
     const places = [];
     for (const r of rows) {

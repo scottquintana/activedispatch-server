@@ -1,13 +1,11 @@
-// src/adapters/nashville.js
 const { request } = require("undici");
 const { geocode, normalizeAddress } = require("../services/geocode");
 
-/* -------------------- helpers -------------------- */
+// Helpers
 
-// Normalize intersections and title-case a street string.
 function normalizeIntersection(s) {
   let t = String(s || "").trim();
-  // Backslashes -> slash; normalize spacing around slash; collapse spaces
+  // Backslashes -> slash, normalize spacing around slash, collapse spaces
   t = t.replace(/\\+/g, "/").replace(/\s*\/\s*/g, " / ").replace(/\s{2,}/g, " ");
   return t;
 }
@@ -17,9 +15,9 @@ function titleCase(s) {
     .replace(/\b([a-z])([a-z0-9']*)/g, (_, a, rest) => a.toUpperCase() + rest);
 }
 
-// Pick a display city: if the feed gives a directional precinct, fall back to Nashville.
+// Pick a display city. If the feed gives a directional precinct, fall back to Nashville.
 const PRECINCT_OR_DIRECTION = new Set([
-  "EAST", "WEST", "NORTH", "SOUTH", "CENTRAL", "MIDTOWN", "DOWNTOWN"
+  "EAST", "WEST", "NORTH", "SOUTH", "CENTRAL", "MIDTOWN", "DOWNTOWN",
 ]);
 function pickDisplayCity(cityName) {
   const raw = (cityName || "").toString().trim();
@@ -29,7 +27,7 @@ function pickDisplayCity(cityName) {
   return titleCase(raw);
 }
 
-// Build the final printable address strictly from the feed + chosen city (never the geocoder fmt).
+// Build the final printable address strictly from the feed + chosen city.
 function buildDisplayAddress(rawStreet, cityName) {
   const street = titleCase(normalizeIntersection(rawStreet || ""));
   const city = pickDisplayCity(cityName);
@@ -80,7 +78,7 @@ function extractName(props = {}, fallbackCat) {
   return props.Headline ?? props.Title ?? fallbackCat ?? "Incident";
 }
 
-// helper to title-case incident type names nicely
+// Helper to title-case incident type names nicely
 function formatIncidentTypeName(raw) {
   if (!raw) return undefined;
   return String(raw)
@@ -91,7 +89,7 @@ function formatIncidentTypeName(raw) {
       if (/^[\/\- ]+$/.test(part)) return part; // keep delimiters as-is
       return part.charAt(0).toUpperCase() + part.slice(1);
     })
-    .join('')
+    .join("")
     .trim();
 }
 
@@ -116,7 +114,50 @@ function extractCallTimeReceived(props = {}) {
   return toISO(tsRaw);
 }
 
-// simple concurrency helper
+// Haversine distance in miles
+function haversineMiles(a, b) {
+  if (
+    !a ||
+    !b ||
+    !Number.isFinite(a.lat) ||
+    !Number.isFinite(a.lon) ||
+    !Number.isFinite(b.lat) ||
+    !Number.isFinite(b.lon)
+  )
+    return Infinity;
+
+  const R = 3958.7613; // Earth radius in miles
+  const dLat = ((b.lat - a.lat) * Math.PI) / 180;
+  const dLon = ((b.lon - a.lon) * Math.PI) / 180;
+  const lat1 = (a.lat * Math.PI) / 180;
+  const lat2 = (b.lat * Math.PI) / 180;
+
+  const sinDLat = Math.sin(dLat / 2);
+  const sinDLon = Math.sin(dLon / 2);
+  const h =
+    sinDLat * sinDLat +
+    Math.cos(lat1) * Math.cos(lat2) * sinDLon * sinDLon;
+
+  const c = 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
+  return R * c;
+}
+
+// Downtown Nashville reference (rough center)
+const NASHVILLE_CENTER = { lat: 36.1627, lon: -86.7816 };
+const MAX_MILES = 40; // Keep an eye on this, in case we need to expand.
+
+// Build a fallback address string by forcing ", Nashville, TN" at the end
+function forceNashville(address) {
+  const s = String(address || "");
+  // Replace trailing ", <something>, TN" with ", Nashville, TN"; otherwise append.
+  if (/, [^,]+, TN$/i.test(s)) {
+    return s.replace(/, [^,]+, TN$/i, ", Nashville, TN");
+  }
+  if (/TN$/i.test(s)) return s; // already TN, keep it
+  return `${s}, Nashville, TN`;
+}
+
+// Concurrency helper
 async function mapWithConcurrency(items, limit, worker) {
   const results = new Array(items.length);
   let i = 0;
@@ -148,7 +189,7 @@ module.exports = {
     const geojson = await res.body.json();
     const features = Array.isArray(geojson?.features) ? geojson.features : [];
 
-    // Step 1: pre-map with props carried through
+    // Pre-map with props carried through
     const prelim = features.map((f) => {
       const props = f?.properties || {};
       const baseAddr = extractAddress(props);
@@ -160,13 +201,13 @@ module.exports = {
         id: extractId(props),
         category: extractCategory(props),
         name: extractName(props, extractCategory(props)),
-        displayAddress, // <- we will ALWAYS return this as the output address
+        displayAddress, // ALWAYS returned as the output address
         updatedAt: extractUpdatedAt(props),
         callTimeReceived: extractCallTimeReceived(props),
       };
     });
 
-    // Step 2: dedupe addresses to minimize geocoding (for coords only)
+    // Dedupe addresses to minimize geocoding (for coords only)
     const uniqueAddrMap = new Map();
     for (const row of prelim) {
       if (!row.displayAddress) continue;
@@ -175,19 +216,37 @@ module.exports = {
     }
     const uniqueNormKeys = Array.from(uniqueAddrMap.keys());
 
-    // Step 3: geocode uniques (coords only; ignore geocoder's formatted address)
+    // Geocode with distance sanity check (retry forced Nashville if > 40 miles)
     const geocodeResults = new Map();
     await mapWithConcurrency(uniqueNormKeys, 5, async (norm) => {
       const original = uniqueAddrMap.get(norm);
       try {
-        const g = await geocode(original);
+        let g = await geocode(original);
+        // If geocode landed too far, try again with ", Nashville, TN"
+        if (
+          g &&
+          Number.isFinite(g.lat) &&
+          Number.isFinite(g.lon) &&
+          haversineMiles({ lat: g.lat, lon: g.lon }, NASHVILLE_CENTER) > MAX_MILES
+        ) {
+          const forced = forceNashville(original);
+          const g2 = await geocode(forced);
+          if (
+            g2 &&
+            Number.isFinite(g2.lat) &&
+            Number.isFinite(g2.lon) &&
+            haversineMiles({ lat: g2.lat, lon: g2.lon }, NASHVILLE_CENTER) <= MAX_MILES
+          ) {
+            g = g2; // prefer the forced-Nashville result if it's within the radius
+          }
+        }
         geocodeResults.set(norm, g);
       } catch {
-        // ignore failures
+        // ignore failures; leave missing
       }
     });
 
-    // Step 4: build final places
+    // Build final places
     const places = [];
     for (const r of prelim) {
       const norm = r.displayAddress ? normalizeAddress(r.displayAddress) : null;
@@ -197,11 +256,11 @@ module.exports = {
       places.push({
         id: r.id,
         name: String(r.name),
-        // keep category optional at top-level or move to extras if you prefer
+        // optional at top-level; move to extras if we want a stricter root
         category: r.category ? String(r.category) : undefined,
         lat: Number(g.lat),
         lon: Number(g.lon),
-        // <-- Always use our formatted original + chosen city, never geocoder's formatted
+        // Always use our formatted original + chosen city, never geocoder's formatted
         address: r.displayAddress,
         callTimeReceived: r.callTimeReceived,
         updatedAt: r.updatedAt,
