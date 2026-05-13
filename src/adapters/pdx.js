@@ -294,23 +294,42 @@ module.exports = {
       if (r.address) r.address = withCityState(r.address);
     }
 
-    // Geocode rows missing coords; also geocode all addresses for neighborhood lookup
+    // Only geocode rows missing coords — KML coords + Portland ArcGIS handle the rest
     const uniqueMap = new Map();
     for (const r of rows) {
-      if (!r.address) continue;
+      if (!r.address || (Number.isFinite(r.lat) && Number.isFinite(r.lon))) continue;
       const norm = normalizeAddress(r.address);
       if (norm && !uniqueMap.has(norm)) uniqueMap.set(norm, r.address);
     }
     const uniqueKeys = Array.from(uniqueMap.keys());
 
+    // Collect unique coords already available from KML for immediate neighborhood lookup
+    const kmlCoords = new Map();
+    for (const r of rows) {
+      if (Number.isFinite(r.lat) && Number.isFinite(r.lon)) {
+        const key = `${r.lat.toFixed(4)},${r.lon.toFixed(4)}`;
+        if (!kmlCoords.has(key)) kmlCoords.set(key, { lat: r.lat, lon: r.lon });
+      }
+    }
+
+    // Run both streams in parallel:
+    // Stream 1 — neighborhood lookups for KML rows (no geocoding needed)
+    // Stream 2 — geocode all addresses, chain neighborhood lookup for geocoded coords
     const geoResults = new Map();
-    await mapWithConcurrency(uniqueKeys, 5, async (norm) => {
-      const original = uniqueMap.get(norm);
-      try {
-        const g = await geocode(original);
-        geoResults.set(norm, g);
-      } catch { /* ignore geocode errors */ }
-    });
+    await Promise.all([
+      mapWithConcurrency(Array.from(kmlCoords.keys()), 5, async (key) => {
+        const { lat, lon } = kmlCoords.get(key);
+        await lookupNeighborhood(lat, lon);
+      }),
+      mapWithConcurrency(uniqueKeys, 5, async (norm) => {
+        const original = uniqueMap.get(norm);
+        try {
+          const g = await geocode(original);
+          geoResults.set(norm, g);
+          await lookupNeighborhood(g.lat, g.lon); // cache hit if KML coord already resolved
+        } catch { /* ignore geocode errors */ }
+      }),
+    ]);
 
     // Neighborhood lookup — collect unique coords
     const uniqueCoords = new Map();
