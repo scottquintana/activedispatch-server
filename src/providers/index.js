@@ -1,8 +1,9 @@
 const nashvilleMNPD = require("../adapters/nashville");
 const pdx = require("../adapters/pdx");
 const sf = require("../adapters/sf");
+const orl = require("../adapters/orl");
 
-const registry = { nashvilleMNPD, pdx, sf };
+const registry = { nashvilleMNPD, pdx, sf, orl };
 
 const CITY_PROVIDER = {
   nashville: "nashvilleMNPD",
@@ -10,7 +11,9 @@ const CITY_PROVIDER = {
   pdx: "pdx",
   sf: "sf",
   "san-francisco": "sf",
-  sanfrancisco: "sf"
+  sanfrancisco: "sf",
+  orlando: "orl",
+  orl: "orl",
 };
 
 function resolveProvider(city) {

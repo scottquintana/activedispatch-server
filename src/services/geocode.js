@@ -35,12 +35,18 @@ async function geocode(address) {
   const lat = hit?.geometry?.lat;
   const lon = hit?.geometry?.lng;
   const formatted = hit?.formatted;
+  const components = hit?.components ?? {};
+  const neighborhood =
+    components.neighbourhood ||
+    components.suburb ||
+    components.city_district ||
+    undefined;
 
   if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
     throw new Error("Geocode: no results");
   }
 
-  const data = { lat, lon, formatted };
+  const data = { lat, lon, formatted, neighborhood };
   cache.set(q, { data, expiresAt: now + TTL * 1000 });
   return data;
 }
