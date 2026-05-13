@@ -3,7 +3,34 @@ const { XMLParser } = require("fast-xml-parser");
 const cheerio = require("cheerio");
 const { geocode, normalizeAddress } = require("../services/geocode");
 
-// Helpers
+const PDX_NEIGHBORHOOD_URL = "https://www.portlandmaps.com/arcgis/rest/services/Public/Boundaries/MapServer/1/query";
+const neighborhoodCache = new Map();
+
+async function lookupNeighborhood(lat, lon) {
+  const key = `${lat.toFixed(4)},${lon.toFixed(4)}`;
+  if (neighborhoodCache.has(key)) return neighborhoodCache.get(key);
+
+  const url = new URL(PDX_NEIGHBORHOOD_URL);
+  url.searchParams.set("geometry", `${lon},${lat}`);
+  url.searchParams.set("geometryType", "esriGeometryPoint");
+  url.searchParams.set("spatialRel", "esriSpatialRelIntersects");
+  url.searchParams.set("outFields", "MAPLABEL");
+  url.searchParams.set("returnGeometry", "false");
+  url.searchParams.set("inSR", "4326");
+  url.searchParams.set("f", "json");
+
+  try {
+    const res = await request(url.toString(), { method: "GET" });
+    const body = await res.body.json();
+    const name = body?.features?.[0]?.attributes?.MAPLABEL || null;
+    neighborhoodCache.set(key, name);
+    return name;
+  } catch {
+    return null;
+  }
+}
+
+/** ---------- helpers ---------- */
 function withCityState(address) {
   if (!address) return "Portland, OR";
   const lower = String(address).toLowerCase();
@@ -34,15 +61,18 @@ function parseKmlDescription(descRaw = "") {
   
     // Remove any inline timestamp if it appears on the same line as the address
     const TS_INLINE =
-      /\b(?:Sun|Mon|Tue|Tues|Wed|Thu|Thur|Thurs|Fri|Sat)(?:day)?,\s+[A-Za-z]+\s+\d{1,2},\s+\d{4}\s+\d{1,2}:\d{2}\s+(?:AM|PM)\b/i;
+      /\b(?:Sunday|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sun|Mon|Tue|Tues|Wed|Thu|Thur|Thurs|Fri|Sat),?\s+[A-Za-z]+\s+\d{1,2},\s+\d{4}\s+\d{1,2}:\d{2}\s+(?:AM|PM)\b/i;
     addrPart = addrPart.replace(TS_INLINE, "").trim();
   
     // Extract and remove the bracketed incident id, e.g. "[Portland Police #PP25000223544]"
     let incidentId;
-    addrPart = addrPart.replace(/\[(?:Portland Police|PPB|Police)[^#]*#([A-Za-z0-9-]+)\]/i, (_, id) => {
+    addrPart = addrPart.replace(/\[(?:Portland Police|Gresham Police|PPB|Police)[^#]*#([A-Za-z0-9-]+)\]/i, (_, id) => {
       incidentId = id;
       return "";
     }).trim();
+
+    // Normalize known abbreviations
+    addrPart = addrPart.replace(/\bGRSM\b/i, "Gresham");
   
     // Normalize address punctuation
     addrPart = addrPart
@@ -264,10 +294,10 @@ module.exports = {
       if (r.address) r.address = withCityState(r.address);
     }
 
-    // Geocode only those missing coords
-    const needGeo = rows.filter(r => !(Number.isFinite(r.lat) && Number.isFinite(r.lon)) && r.address);
+    // Geocode rows missing coords; also geocode all addresses for neighborhood lookup
     const uniqueMap = new Map();
-    for (const r of needGeo) {
+    for (const r of rows) {
+      if (!r.address) continue;
       const norm = normalizeAddress(r.address);
       if (norm && !uniqueMap.has(norm)) uniqueMap.set(norm, r.address);
     }
@@ -282,14 +312,31 @@ module.exports = {
       } catch { /* ignore geocode errors */ }
     });
 
+    // Neighborhood lookup — collect unique coords
+    const uniqueCoords = new Map();
+    for (const r of rows) {
+      const lat = Number.isFinite(r.lat) ? r.lat : geoResults.get(normalizeAddress(r.address))?.lat;
+      const lon = Number.isFinite(r.lon) ? r.lon : geoResults.get(normalizeAddress(r.address))?.lon;
+      if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
+      const key = `${lat.toFixed(4)},${lon.toFixed(4)}`;
+      if (!uniqueCoords.has(key)) uniqueCoords.set(key, { lat, lon });
+    }
+    const coordKeys = Array.from(uniqueCoords.keys());
+    await mapWithConcurrency(coordKeys, 5, async (key) => {
+      const { lat, lon } = uniqueCoords.get(key);
+      await lookupNeighborhood(lat, lon);
+    });
+
     const places = [];
     for (const r of rows) {
       let lat = r.lat, lon = r.lon, address = r.address;
-      if (!(Number.isFinite(lat) && Number.isFinite(lon)) && address) {
-        const g = geoResults.get(normalizeAddress(address));
+      const g = address ? geoResults.get(normalizeAddress(address)) : undefined;
+      if (!(Number.isFinite(lat) && Number.isFinite(lon))) {
         if (g) { lat = g.lat; lon = g.lon; address = g.formatted || address; }
       }
       if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
+
+      const neighborhood = await lookupNeighborhood(lat, lon) || undefined;
 
       places.push({
         id: r.id,
@@ -302,7 +349,8 @@ module.exports = {
         extras: {
           incidentTypeCode: r.extras?.incidentTypeCode,
           incidentTypeName: r.extras?.incidentTypeName || r.name,
-          incidentId: r.extras?.incidentId
+          incidentId: r.extras?.incidentId,
+          neighborhood,
         }
       });
     }

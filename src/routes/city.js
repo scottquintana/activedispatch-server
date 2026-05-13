@@ -19,7 +19,8 @@ async function cityRoutes(fastify) {
     fastify.log.info({ city, provider: provider.name }, "fetching city");
     const data = await provider.fetchCity(city);
 
-    cache.set(key, { data, expiresAt: now + cityTTL * 1000 });
+    const ttl = (provider.ttl ?? cityTTL) * 1000;
+    cache.set(key, { data, expiresAt: now + ttl });
     reply.header("X-Cache", cached ? "stale-refresh" : "miss");
     return data;
   });
