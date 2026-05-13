@@ -131,27 +131,15 @@ module.exports = {
     }
     const uniqueKeys = Array.from(uniqueMap.keys());
 
+    // Geocode then immediately chain neighborhood lookup — single concurrent pass
     const geoResults = new Map();
     await mapWithConcurrency(uniqueKeys, 5, async (norm) => {
       const original = uniqueMap.get(norm);
       try {
         const g = await geocode(original);
         geoResults.set(norm, g);
+        await lookupNeighborhood(g.lat, g.lon);
       } catch { /* ignore geocode errors */ }
-    });
-
-    // Neighborhood lookup — collect unique coords from geocoded results
-    const uniqueCoords = new Map();
-    for (const r of rows) {
-      const g = geoResults.get(normalizeAddress(r.address));
-      if (!g) continue;
-      const key = `${g.lat.toFixed(4)},${g.lon.toFixed(4)}`;
-      if (!uniqueCoords.has(key)) uniqueCoords.set(key, { lat: g.lat, lon: g.lon });
-    }
-    const coordKeys = Array.from(uniqueCoords.keys());
-    await mapWithConcurrency(coordKeys, 5, async (key) => {
-      const { lat, lon } = uniqueCoords.get(key);
-      await lookupNeighborhood(lat, lon);
     });
 
     const places = [];
