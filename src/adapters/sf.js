@@ -127,7 +127,7 @@ function withCityState(addr) {
 module.exports = {
   name: "sf",
 
-  async fetchCity() {
+  async fetchCity(city, log) {
     // Build SODA query
     const url = new URL(DATASET);
     url.searchParams.set("$order", "received_datetime DESC");
@@ -158,10 +158,7 @@ module.exports = {
     const places = [];
     for (const r of rows) {
       const { lat, lon } = extractCoords(r);
-      if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
-        if (process.env.LOG_LEVEL === "debug") console.log("SF skip: no coords for row", r.cad_number || r.id || "");
-        continue; // no coords → skip
-      }
+      if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue; // sensitive call or missing coords
 
       // Display address purely from dataset; pretty-print intersections
       const rawStreet = bestStreetFromDataset(r);
@@ -216,8 +213,8 @@ module.exports = {
       });
     }
 
-    if (process.env.LOG_LEVEL === "debug") {
-      console.log(`[SF] rows: ${rows.length}, places: ${places.length}`);
+    if (rows.length > 0 && places.length === 0) {
+      log?.warn({ city: "sf", rowsFetched: rows.length }, "all rows skipped (sensitive calls or missing coords)");
     }
 
     return {

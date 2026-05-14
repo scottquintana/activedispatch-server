@@ -258,7 +258,7 @@ function parseHTMLTable(text) {
 module.exports = {
   name: "pdx",
 
-  async fetchCity(city) {
+  async fetchCity(city, log) {
     const url = process.env.PORTLAND_URL;
     if (!url) throw new Error("PORTLAND_URL is not set");
 
@@ -316,6 +316,7 @@ module.exports = {
     // Stream 1 — neighborhood lookups for KML rows (no geocoding needed)
     // Stream 2 — geocode all addresses, chain neighborhood lookup for geocoded coords
     const geoResults = new Map();
+    let geocodeFailed = 0;
     await Promise.all([
       mapWithConcurrency(Array.from(kmlCoords.keys()), 5, async (key) => {
         const { lat, lon } = kmlCoords.get(key);
@@ -327,9 +328,15 @@ module.exports = {
           const g = await geocode(original);
           geoResults.set(norm, g);
           await lookupNeighborhood(g.lat, g.lon); // cache hit if KML coord already resolved
-        } catch { /* ignore geocode errors */ }
+        } catch {
+          geocodeFailed++;
+        }
       }),
     ]);
+
+    if (geocodeFailed > 0) {
+      log?.warn({ city: "pdx", geocodeFailed, geocodeAttempted: uniqueKeys.length }, "geocode failures");
+    }
 
     // Neighborhood lookup — collect unique coords
     const uniqueCoords = new Map();

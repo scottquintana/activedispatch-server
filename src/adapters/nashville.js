@@ -177,7 +177,7 @@ async function mapWithConcurrency(items, limit, worker) {
 module.exports = {
   name: "nashvilleMNPD",
 
-  async fetchCity(city) {
+  async fetchCity(city, log) {
     const url = process.env.NASHVILLE_URL;
     if (!url) throw new Error("NASHVILLE_URL is not set");
 
@@ -218,6 +218,7 @@ module.exports = {
 
     // Geocode with distance sanity check (retry forced Nashville if > 40 miles)
     const geocodeResults = new Map();
+    let geocodeFailed = 0;
     await mapWithConcurrency(uniqueNormKeys, 5, async (norm) => {
       const original = uniqueAddrMap.get(norm);
       try {
@@ -242,9 +243,13 @@ module.exports = {
         }
         geocodeResults.set(norm, g);
       } catch {
-        // ignore failures; leave missing
+        geocodeFailed++;
       }
     });
+
+    if (geocodeFailed > 0) {
+      log?.warn({ city: "nashville", geocodeFailed, geocodeAttempted: uniqueNormKeys.length }, "geocode failures");
+    }
 
     // Build final places
     const places = [];

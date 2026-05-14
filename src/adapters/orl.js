@@ -94,7 +94,7 @@ module.exports = {
   name: "orl",
   ttl: 30, // Orlando's feed refreshes every ~3s; 30s balances freshness vs. load
 
-  async fetchCity(city) {
+  async fetchCity(city, log) {
     const url = process.env.ORLANDO_URL;
     if (!url) throw new Error("ORLANDO_URL is not set");
 
@@ -133,14 +133,21 @@ module.exports = {
 
     // Geocode then immediately chain neighborhood lookup — single concurrent pass
     const geoResults = new Map();
+    let geocodeFailed = 0;
     await mapWithConcurrency(uniqueKeys, 5, async (norm) => {
       const original = uniqueMap.get(norm);
       try {
         const g = await geocode(original);
         geoResults.set(norm, g);
         await lookupNeighborhood(g.lat, g.lon);
-      } catch { /* ignore geocode errors */ }
+      } catch {
+        geocodeFailed++;
+      }
     });
+
+    if (geocodeFailed > 0) {
+      log?.warn({ city: "orl", geocodeFailed, geocodeAttempted: uniqueKeys.length }, "geocode failures");
+    }
 
     const places = [];
     for (const r of rows) {

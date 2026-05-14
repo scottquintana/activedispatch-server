@@ -17,7 +17,18 @@ async function cityRoutes(fastify) {
 
     const provider = resolveProvider(city);
     fastify.log.info({ city, provider: provider.name }, "fetching city");
-    const data = await provider.fetchCity(city);
+
+    let data;
+    try {
+      data = await provider.fetchCity(city, fastify.log);
+    } catch (err) {
+      fastify.log.error({ city, provider: provider.name, err }, "adapter fetch failed");
+      throw err;
+    }
+
+    if (data.places.length === 0) {
+      fastify.log.warn({ city, provider: provider.name }, "adapter returned zero places");
+    }
 
     const ttl = (provider.ttl ?? cityTTL) * 1000;
     cache.set(key, { data, expiresAt: now + ttl });
