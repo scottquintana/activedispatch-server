@@ -36,11 +36,6 @@ spec:
               value: "2592000"
 
             # secrets (already created in Secret Manager)
-            - name: OPENCAGE_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: OPENCAGE_KEY
-                  key: latest
             - name: SF_SODA_APP_TOKEN
               valueFrom:
                 secretKeyRef:

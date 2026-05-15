@@ -2,8 +2,8 @@ const { request } = require("undici");
 const { Firestore } = require("@google-cloud/firestore");
 const crypto = require("crypto");
 
-const KEY = process.env.OPENCAGE_KEY;
 const TTL = Number(process.env.GEOCODE_TTL_SECONDS || 30 * 24 * 3600);
+const CENSUS_URL = "https://geocoding.geo.census.gov/geocoder/locations/onelineaddress";
 
 // In-memory cache — fastest layer, lives for process lifetime
 const cache = new Map();
@@ -57,8 +57,12 @@ function normalizeAddress(addr) {
   return String(addr || "").trim().replace(/\s+/g, " ").toLowerCase();
 }
 
+// Census geocoder uses "&" for intersections; our adapters use " / "
+function toCensusAddress(addr) {
+  return String(addr || "").replace(/\s*\/\s*/g, " & ");
+}
+
 async function geocode(address) {
-  if (!KEY) throw new Error("OPENCAGE_KEY is not set");
   const q = normalizeAddress(address);
   const now = Date.now();
 
@@ -73,12 +77,11 @@ async function geocode(address) {
     return persisted;
   }
 
-  // 3. OpenCage API
-  const url = new URL("https://api.opencagedata.com/geocode/v1/json");
-  url.searchParams.set("q", address);
-  url.searchParams.set("key", KEY);
-  url.searchParams.set("limit", "1");
-  url.searchParams.set("no_annotations", "1");
+  // 3. US Census Geocoder (free, no API key)
+  const url = new URL(CENSUS_URL);
+  url.searchParams.set("address", toCensusAddress(address));
+  url.searchParams.set("benchmark", "Public_AR_Current");
+  url.searchParams.set("format", "json");
 
   const res = await request(url.toString(), { method: "GET" });
   if (res.statusCode >= 400) {
@@ -87,22 +90,16 @@ async function geocode(address) {
   }
   const body = await res.body.json();
 
-  const hit = body?.results?.[0];
-  const lat = hit?.geometry?.lat;
-  const lon = hit?.geometry?.lng;
-  const formatted = hit?.formatted;
-  const components = hit?.components ?? {};
-  const neighborhood =
-    components.neighbourhood ||
-    components.suburb ||
-    components.city_district ||
-    undefined;
+  const hit = body?.result?.addressMatches?.[0];
+  const lat = hit?.coordinates?.y;
+  const lon = hit?.coordinates?.x;
+  const formatted = hit?.matchedAddress;
 
   if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
     throw new Error("Geocode: no results");
   }
 
-  const data = { lat, lon, formatted, neighborhood };
+  const data = { lat, lon, formatted };
   const expiresAt = now + TTL * 1000;
 
   cache.set(q, { data, expiresAt });

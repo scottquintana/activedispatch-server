@@ -134,11 +134,12 @@ Set `FIRESTORE_DISABLED=true` in `.env` to skip Firestore during local developme
 
 ## Geocoding APIs
 
-### OpenCage
+### US Census Geocoder
 - Used to resolve street addresses → lat/lon coordinates
-- Also returns a `neighborhood` component (from OSM data) when available
-- Required for: Orlando (all records), Portland (records missing KML coords)
-- Env var: `OPENCAGE_KEY`
+- Free, no API key required
+- Required for: Orlando (all records), Portland (records missing KML coords), Nashville (all records)
+- Handles intersections using `&` separator (adapters use ` / ` which is normalized before the API call)
+- Endpoint: `https://geocoding.geo.census.gov/geocoder/locations/onelineaddress`
 
 ### ArcGIS point-in-polygon
 - Used for neighborhood lookup from coordinates
@@ -232,7 +233,7 @@ The geocode cache uses Firestore (Native mode, `nam5` multi-region). The Cloud R
 | `SF_LIMIT`            | No       | Max records to fetch from SF (default: `1000`)         |
 | `CITY_TTL_SECONDS`    | No       | Default route cache TTL in seconds (default: `900`)    |
 | `GEOCODE_TTL_SECONDS` | No       | Geocode cache TTL in seconds (default: `2592000`)      |
-| `OPENCAGE_KEY`        | Yes      | OpenCage geocoding API key                             |
+| `OPENCAGE_KEY`        | No       | Unused — retained in Secret Manager but no longer called |
 | `SF_SODA_APP_TOKEN`   | No       | Socrata app token for higher SF API rate limits        |
 | `FIRESTORE_DISABLED`  | No       | Set to `true` to skip Firestore (local dev)            |
 
