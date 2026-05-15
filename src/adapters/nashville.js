@@ -243,6 +243,22 @@ module.exports = {
         }
         geocodeResults.set(norm, g);
       } catch {
+        // Census didn't recognize the city name — retry with Nashville forced
+        try {
+          const forced = forceNashville(original);
+          if (forced !== original) {
+            const g2 = await geocode(forced);
+            if (
+              g2 &&
+              Number.isFinite(g2.lat) &&
+              Number.isFinite(g2.lon) &&
+              haversineMiles({ lat: g2.lat, lon: g2.lon }, NASHVILLE_CENTER) <= MAX_MILES
+            ) {
+              geocodeResults.set(norm, g2);
+              return;
+            }
+          }
+        } catch { /* ignore */ }
         geocodeFailed++;
       }
     });
