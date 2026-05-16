@@ -19,9 +19,23 @@ function pick(v, ...keys) {
   for (const k of keys) if (v && v[k] != null) return v[k];
   return undefined;
 }
+// SF Socrata timestamps have no timezone — they're in Pacific Time.
+// Resolve the current PT offset (handles PDT/PST automatically) and append it before parsing.
+function getPTOffsetString() {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/Los_Angeles',
+    timeZoneName: 'shortOffset',
+  }).formatToParts(new Date());
+  const raw = parts.find(p => p.type === 'timeZoneName')?.value ?? 'GMT-7'; // e.g. "GMT-7"
+  const hours = parseInt(raw.replace('GMT', ''), 10) || -7;
+  return `${hours < 0 ? '-' : '+'}${String(Math.abs(hours)).padStart(2, '0')}:00`;
+}
+
+const _ptOffset = getPTOffsetString();
+
 function toISO(ts) {
   if (!ts) return undefined;
-  const d = new Date(ts);
+  const d = new Date(`${ts}${_ptOffset}`);
   return isNaN(d.getTime()) ? undefined : d.toISOString();
 }
 function s(v) {
