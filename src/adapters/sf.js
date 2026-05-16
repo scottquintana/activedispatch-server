@@ -35,7 +35,10 @@ const _ptOffset = getPTOffsetString();
 
 function toISO(ts) {
   if (!ts) return undefined;
-  const d = new Date(`${ts}${_ptOffset}`);
+  const str = String(ts);
+  // Only append PT offset if the timestamp has no timezone info already
+  const hasTimezone = str.endsWith('Z') || /[+-]\d{2}:\d{2}$/.test(str);
+  const d = new Date(hasTimezone ? str : `${str}${_ptOffset}`);
   return isNaN(d.getTime()) ? undefined : d.toISOString();
 }
 function s(v) {
