@@ -219,7 +219,7 @@ module.exports = {
     // Geocode with distance sanity check (retry forced Nashville if > 40 miles)
     const geocodeResults = new Map();
     let geocodeFailed = 0;
-    await mapWithConcurrency(uniqueNormKeys, 5, async (norm) => {
+    await mapWithConcurrency(uniqueNormKeys, 10, async (norm) => {
       const original = uniqueAddrMap.get(norm);
       try {
         let g = await geocode(original);

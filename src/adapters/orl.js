@@ -134,7 +134,7 @@ module.exports = {
     // Geocode then immediately chain neighborhood lookup — single concurrent pass
     const geoResults = new Map();
     let geocodeFailed = 0;
-    await mapWithConcurrency(uniqueKeys, 5, async (norm) => {
+    await mapWithConcurrency(uniqueKeys, 10, async (norm) => {
       const original = uniqueMap.get(norm);
       try {
         const g = await geocode(original);

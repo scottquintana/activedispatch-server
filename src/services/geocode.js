@@ -83,7 +83,7 @@ async function geocode(address) {
   url.searchParams.set("benchmark", "Public_AR_Current");
   url.searchParams.set("format", "json");
 
-  const res = await request(url.toString(), { method: "GET" });
+  const res = await request(url.toString(), { method: "GET", headersTimeout: 8000, bodyTimeout: 8000 });
   if (res.statusCode >= 400) {
     const text = await res.body.text();
     throw new Error(`Geocode HTTP ${res.statusCode}: ${text.slice(0, 200)}`);
